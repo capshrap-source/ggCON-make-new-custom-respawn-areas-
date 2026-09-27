@@ -1,0 +1,108 @@
+import time
+import math
+import requests
+
+# --- CONFIGURATION ---
+GGCON_URL = "https://gghost.games"  # Your ggCON API endpoint
+GGCON_PASSWORD = "YOUR_GGCON_PASSWORD"
+
+# Multiple trigger zones: (X, Y, Z)
+TARGET_LOCATIONS = [
+    (-617546.438, -555853.812, 2452.380),  # Zone 1
+    (-621889.625, -557924.125, 2448.140),  # Zone 2
+    (565135.312, -220825.234, 393.220),    # Zone 3
+    (568637.188, -225306.328, 356.130),    # Zone 4
+    (25094.250,  -675341.438, 340.130)     # Zone 5
+]
+
+TRIGGER_RADIUS = 50.0       # Distance in meters from target to trigger spawns
+ZOMBIE_SPAWN_COUNT = 5      # Number of zombies to spawn per approach
+COOLDOWN_TIME = 120         # Seconds before zone can spawn again
+
+# Zombie blueprint path
+ZOMBIE_BLUEPRINT = "/Game/ConZ_Files/Characters/Zombies2/Blueprints/BP_Zombie_Civilian.BP_Zombie_Civilian_C"
+
+# --- STATE TRACKING ---
+zone_cooldowns = {loc: 0 for loc in TARGET_LOCATIONS}
+
+# --- FUNCTIONS ---
+def send_ggcon_command(command_str):
+    """Sends a native SCUM command via the ggCON API backend."""
+    headers = {
+        "Authorization": f"Bearer {GGCON_PASSWORD}",
+        "X-Password": GGCON_PASSWORD,
+        "Content-Type": "application/json"
+    }
+    payload = {"command": command_str}
+    try:
+        response = requests.post(GGCON_URL, json=payload, headers=headers, timeout=10)
+        if response.status_code == 200:
+            print(f"[ggCON] Executed: {command_str}")
+            return response.json()
+        else:
+            print(f"[ggCON Error] Status {response.status_code}: {response.text}")
+    except Exception as e:
+        print(f"[Connection Error] {e}")
+    return None
+
+def get_online_players():
+    """Retrieves current player data using ggCON's #ListPlayers function."""
+    result = send_ggcon_command("#ListPlayers")
+    if not result:
+        return []
+
+    # Example parsing if result is JSON
+    if isinstance(result, list):
+        return result
+
+    # Example parsing if result is raw text
+    if isinstance(result, str) and "X=" in result:
+        players = []
+        for line in result.splitlines():
+            if "X=" in line and "Y=" in line:
+                try:
+                    x_val = float(line.split("X=")[1].split()[0])
+                    y_val = float(line.split("Y=")[1].split()[0])
+                    players.append({"X": x_val, "Y": y_val})
+                except ValueError:
+                    pass
+        return players
+
+    return []
+
+def distance(x1, y1, x2, y2):
+    """Calculates 2D distance between two points."""
+    return math.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+
+def spawn_zombies_at(x, y, z):
+    """Spawns zombies at given coordinates using the specified blueprint."""
+    for _ in range(ZOMBIE_SPAWN_COUNT):
+        send_ggcon_command(f"#SpawnCharacter {ZOMBIE_BLUEPRINT} {x} {y} {z}")
+
+# --- MAIN LOOP ---
+print("[Zombie Spawner] Running... Press Ctrl+C to stop.")
+try:
+    while True:
+        players = get_online_players()
+        now = time.time()
+
+        for loc in TARGET_LOCATIONS:
+            loc_x, loc_y, loc_z = loc
+            if now < zone_cooldowns[loc]:
+                continue  # Still on cooldown
+
+            for player in players:
+                px, py = player.get("X"), player.get("Y")
+                if px is None or py is None:
+                    continue
+
+                if distance(px, py, loc_x, loc_y) <= TRIGGER_RADIUS:
+                    print(f"[Trigger] Player near {loc}, spawning zombies...")
+                    spawn_zombies_at(loc_x, loc_y, loc_z)
+                    zone_cooldowns[loc] = now + COOLDOWN_TIME
+                    break  # Only trigger once per check
+
+        time.sleep(5)  # Check every 5 seconds
+
+except KeyboardInterrupt:
+    print("\n[Zombie Spawner] Stopped.")
